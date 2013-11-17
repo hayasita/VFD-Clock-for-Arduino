@@ -1,19 +1,32 @@
 #include <Wire.h>
 #include <Bounce.h>
 #include <RTC8564.h>
-#include <MsTimer2.h>
+//#include <MsTimer2.h>
+#include <TimerOne.h>
 #include <inttypes.h>
 
-#define SECOND_COUNTER 1000
-#define BTN0 14
-#define BTN1 15
-#define BTN2 16
+const unsigned char ver[] = "06";
+#define SHIELD_REV 230           // 基板Revision　×　100の値を設定　Rev.2.2 = 220
+#define LEONARDO               // Arduino種類 Leonardoでなければ、コメントアウトする。
+                                 // Leonardoは基板Revisionが220以上である必要がある。
+#define SW3 1                    // SW3を実装していない:0 実装している:1　Rev.2.1のみ有効
+#define  TIMER1_INTTIME  500     // タイマインタラプト周期
+#define  COLON_PWM      0x20     // : 点灯用PWM高さ
+#define  COLON_BRIGHT   0x04     // : の明るさ。値が大きいほど明るくなる。
+#define  DISP_PRE      (2000/TIMER1_INTTIME)  // 数字表示周期作成
+//#define  KEY_TEST                // キー入力テスト表示 Revision210以前はテスト不要
+
+#if (SHIELD_REV <= 210)          // Rev.2.1以前はLeonardo非対応
+#undef LEONARDO
+#endif
 
 unsigned int count;
-unsigned char time[6];  // 表示データ
-unsigned char piriod[6];
+unsigned int second_counterw;
+unsigned int colon_brightw;
+unsigned char time[6];          // 数値表示データ
+unsigned char piriod[6];        // 各桁ピリオドデータ
 unsigned char font[18] = {
-/*  cdefgabp  */
+/*  cebagfdp  */
   0b11110110, //0
   0b10100000, //1
   0b01111010, //2
@@ -63,21 +76,60 @@ unsigned char mode;
 #define MODE_ADJ_DATE_WAIT  10
 #define MODE_ADJ_DATE       11
 
+// SW定義
+#define BTN1 14
+#define BTN2 15
+
+#if ((SHIELD_REV == 210) && (SW3 == 0))
+#define BTN3 15
+#else
+#define BTN3 16
+#endif
+
+
 unsigned int itm_firstf;
-Bounce bounce_btn0 = Bounce( BTN0,15 );
-Bounce bounce_btn1 = Bounce( BTN1,15 );
-Bounce bounce_btn2 = Bounce( BTN2,15 );
-unsigned char btn0_chkw;
-unsigned char btn1_chkw;
-unsigned char btn2_chkw;
+unsigned char BTN1_chkw;
+unsigned char BTN2_chkw;
+unsigned char BTN3_chkw;
+#if (SHIELD_REV <= 210)
+Bounce bounce_BTN1 = Bounce( BTN1,15 );
+Bounce bounce_BTN2 = Bounce( BTN2,15 );
+#endif
+#if ((SHIELD_REV != 210) || (SW3 != 0))
+Bounce bounce_BTN3 = Bounce( BTN3,15 );
+#endif
+#if (SHIELD_REV >= 220)
+#define ITM_ANACH   0
+#define ITM_SW123   0
+#define ITM_SW12    1
+#define ITM_SW13    2
+#define ITM_SW1     3
+#define ITM_SW23    4
+#define ITM_SW2     5
+#define ITM_SW3     6
+#define ITM_SW_NON  7
+static unsigned int itm_base_boundary[] = {0,187,200,213,236,262,286,315,500};
+unsigned int itm_boundary[sizeof(itm_base_boundary)];
+#endif
+
+
 uint8_t last_second;
 uint8_t date_time[7];
+
+unsigned char key_now;
+unsigned char itm_key_sq;
+unsigned char itm_key_num;
 
 //
 void adj(unsigned char key);
 void disp_datamake(void);
+void itm_man(void);
 void itm(void);
+void itm_ana_ini(void);
+unsigned char itm_ana(void);
 void disp_vfd(void);
+void disp_colon(unsigned char disp_count,unsigned char *portc,unsigned char *portd);
+void disp_colon_leonardo(unsigned char disp_count,unsigned char *portf);
 void int_count(void);
 void rtc_chk(void);
 
@@ -91,28 +143,51 @@ void setup()
     pinMode(i, OUTPUT);
     digitalWrite(i, LOW);
   }
-// 入力スイッチポート初期化  
-  for (i=BTN0; i<=BTN2; i++) {
+  pinMode(17, OUTPUT);      // -
+  digitalWrite(17, LOW);
+
+//  入力スイッチポート初期化  
+if( (SHIELD_REV <= 200) || ((SHIELD_REV == 210) && (SW3 != 0)) ){
+  for (i=BTN1; i<=BTN3; i++) {
     pinMode(i,INPUT);
     digitalWrite(i, HIGH);
   }
+}
+else if( ((SHIELD_REV == 210) && (SW3 == 0)) ){
+  for (i=BTN1; i<=BTN2; i++) {
+    pinMode(i,INPUT);
+    digitalWrite(i, HIGH);
+  }
+  pinMode(16,OUTPUT);       // :
+  digitalWrite(16, LOW);
+}
+else if(SHIELD_REV >= 220){
+  pinMode(14, INPUT);
+  itm_ana_ini();
+}
 
-  pinMode(17, OUTPUT);      // -
-  digitalWrite(i, LOW);
+#ifdef LEONARDO
+  pinMode(A4,OUTPUT);       // :
+  digitalWrite(A4, LOW);
+#endif
+
+
+  BTN1_chkw = 0;
+  BTN2_chkw = 0;
+  BTN3_chkw = 0;
+  itm_firstf = 0;
 
   Rtc.begin();
-
-  btn0_chkw = 0;
-  btn1_chkw = 0;
-  btn2_chkw = 0;
-  itm_firstf = 0;
   
 // タイマインタラプト初期化
-  MsTimer2::set(1, int_count); // 1msごとにカウント
-  MsTimer2::start();
+//  MsTimer2::set(1, int_count); // 1msごとにカウント
+//  MsTimer2::start();
+  Timer1.initialize(TIMER1_INTTIME);      // 割り込み周期設定
+  Timer1.attachInterrupt(int_count);
 
   mode = MODE_CLOCK;
 
+  second_counterw = int(1000000/TIMER1_INTTIME);    // 1秒間の割り込み回数
   count = 0;
   last_second = 0;
 
@@ -120,10 +195,10 @@ void setup()
 
 void loop() 
 {  
-  rtc_chk();
-  itm();
-  disp_datamake();
-//  disp_vfd();
+  rtc_chk();        // RTC読み出し
+  itm_man();        // SW入力処理
+  disp_datamake();  // 表示データ作成
+
 }
 
 void rtc_chk(void){
@@ -141,30 +216,45 @@ void rtc_chk(void){
     date_time[5] = Rtc.months();
     date_time[6] = Rtc.years();
   }
+  
+  return;
 }
 
 void disp_datamake(void){
-  // 時刻情報作成 
- if(mode < MODE_DATE){ 
-  time[0]= date_time[0] & 0x0F;
-  time[1]= date_time[0] / 0x10;
-  time[2]= date_time[1]  & 0x0F;
-  time[3]= date_time[1] / 0x10;
-  time[4]= date_time[2]  & 0x0F;
-  time[5]= date_time[2] / 0x10;
- }
- else{
-  time[0]= date_time[3] & 0x0F;
-  time[1]= date_time[3] / 0x10;
-  time[2]= date_time[5]  & 0x0F;
-  time[3]= date_time[5] / 0x10;
-  time[4]= date_time[6]  & 0x0F;
-  time[5]= date_time[6] / 0x10;
- }
-   
-   
+  unsigned int i;
+  unsigned char time_tmp[6];
+
+#ifdef KEY_TEST
+  time_tmp[0]= key_now;
+  time_tmp[1]= DISP_NON;
+  time_tmp[2]= DISP_NON;
+  time_tmp[3]= DISP_NON;
+  time_tmp[4]= DISP_NON;
+  time_tmp[5]= DISP_NON;
+#else
+   // 時刻情報作成 
+  if(mode < MODE_DATE){ 
+    time_tmp[0]= date_time[0] & 0x0F;
+    time_tmp[1]= date_time[0] / 0x10;
+    time_tmp[2]= date_time[1]  & 0x0F;
+    time_tmp[3]= date_time[1] / 0x10;
+    time_tmp[4]= date_time[2]  & 0x0F;
+    time_tmp[5]= date_time[2] / 0x10;
+    colon_brightw = COLON_BRIGHT;
+  }
+  else{
+    time_tmp[0]= date_time[3] & 0x0F;
+    time_tmp[1]= date_time[3] / 0x10;
+    time_tmp[2]= date_time[5]  & 0x0F;
+    time_tmp[3]= date_time[5] / 0x10;
+    time_tmp[4]= date_time[6]  & 0x0F;
+    time_tmp[5]= date_time[6] / 0x10;
+    colon_brightw = 0;
+  }
+#endif
+
   // 点滅処理
-  if(count >= (SECOND_COUNTER/2)){
+  if(count >= (second_counterw/2)){
     // ピリオド消灯処理
     piriod[0] = 0x00;
   }
@@ -175,17 +265,17 @@ void disp_datamake(void){
     // 時計あわせ時桁点滅処理
     if( (mode == MODE_ADJ_HOUR_WAIT) || (mode == MODE_ADJ_HOUR)
      || (mode == MODE_ADJ_YEAR_WAIT) || (mode == MODE_ADJ_YEAR) ){
-      time[4]= DISP_NON;
-      time[5]= DISP_NON;
+      time_tmp[4]= DISP_NON;
+      time_tmp[5]= DISP_NON;
     }
     else if((mode == MODE_ADJ_MIN_WAIT) || (mode == MODE_ADJ_MIN)
      || (mode == MODE_ADJ_MONTH_WAIT) || (mode == MODE_ADJ_MONTH)){
-      time[2]= DISP_NON;
-      time[3]= DISP_NON;
+      time_tmp[2]= DISP_NON;
+      time_tmp[3]= DISP_NON;
     }
     else if((mode == MODE_ADJ_DATE_WAIT) || (mode == MODE_ADJ_DATE)){
-      time[0]= DISP_NON;
-      time[1]= DISP_NON;
+      time_tmp[0]= DISP_NON;
+      time_tmp[1]= DISP_NON;
     }
   }
   
@@ -200,46 +290,55 @@ void disp_datamake(void){
     piriod[2] = 0x00;
     piriod[4] = 0x00;    
   }
-  
+
+  noInterrupts();      // 割り込み禁止
+  for(i=0;i<6;i++){
+    time[i] = time_tmp[i];
+  }
+  interrupts();        // 割り込み許可
+
   return;
 }
 
 void adj(unsigned char key){
-  
+#ifdef KEY_TEST
+  return;
+#endif
+
   switch(mode){
     case MODE_CLOCK:
-      if(key == BTN0){
+      if(key == BTN1){
         mode = MODE_ADJ_HOUR_WAIT;
       }
-      else if(key == BTN1){
+      else if(key == BTN2){
         mode = MODE_DATE;
       }
       break;
     case MODE_DATE:
-      if(key == BTN0){
+      if(key == BTN1){
         mode = MODE_ADJ_YEAR_WAIT;
       }
-      else if((key == BTN1) || (key == BTN2)){
+      else if((key == BTN2) || (key == BTN3)){
         mode = MODE_CLOCK;
       }
       break;
 
     case MODE_ADJ_YEAR_WAIT:
-      if(key == BTN0){
+      if(key == BTN1){
         mode = MODE_ADJ_MONTH_WAIT;
         break;
       }
-      else if((key == BTN1) || (key == BTN2)){
+      else if((key == BTN2) || (key == BTN3)){
         mode = MODE_ADJ_YEAR;  // 時刻調整はbreakせずにこのままMODE_ADJ_YEARに行って行う。
       }
       else{
         break;
       }
     case MODE_ADJ_YEAR:
-      if(key == BTN0){
+      if(key == BTN1){
         mode = MODE_ADJ_MONTH_WAIT;
       }
-      else if(key == BTN1){
+      else if(key == BTN2){
         if(date_time[6] == 0x99){
            date_time[6] = 0x00;
         }
@@ -250,7 +349,7 @@ void adj(unsigned char key){
           date_time[6]++;
         }
       }
-      else if(key == BTN2){
+      else if(key == BTN3){
         if(date_time[6] == 0x00){
            date_time[6] = 0x99;
         }
@@ -263,21 +362,21 @@ void adj(unsigned char key){
       }
       break;
     case MODE_ADJ_MONTH_WAIT:
-      if(key == BTN0){
+      if(key == BTN1){
         mode = MODE_ADJ_DATE_WAIT;
         break;
       }
-      else if((key == BTN1) || (key == BTN2)){
+      else if((key == BTN2) || (key == BTN3)){
         mode = MODE_ADJ_MONTH;  // 時刻調整はbreakせずにこのままMODE_ADJ_YEARに行って行う。
       }
       else{
         break;
       }
     case MODE_ADJ_MONTH:
-      if(key == BTN0){
+      if(key == BTN1){
         mode = MODE_ADJ_DATE_WAIT;
       }
-      else if(key == BTN1){
+      else if(key == BTN2){
         if(date_time[5] == 0x12){
            date_time[5] = 0x01;
         }
@@ -288,7 +387,7 @@ void adj(unsigned char key){
           date_time[5]++;
         }
       }
-      else if(key == BTN2){
+      else if(key == BTN3){
         if(date_time[5] == 0x00){
            date_time[5] = 0x12;
         }
@@ -302,23 +401,23 @@ void adj(unsigned char key){
       break;
       
     case MODE_ADJ_DATE_WAIT:
-      if(key == BTN0){
+      if(key == BTN1){
         mode = MODE_DATE;
          Rtc.sync(date_time,7);
        break;
       }
-      else if((key == BTN1) || (key == BTN2)){
+      else if((key == BTN2) || (key == BTN3)){
         mode = MODE_ADJ_DATE;  // 時刻調整はbreakせずにこのままMODE_ADJ_DATEに行って行う。
       }
       else{
         break;
       }
     case MODE_ADJ_DATE:
-      if(key == BTN0){
+      if(key == BTN1){
         mode = MODE_DATE;
         Rtc.sync(date_time,7);
       }
-      else if(key == BTN1){
+      else if(key == BTN2){
         if(date_time[3] == 0x31){
            date_time[3] = 0x01;
         }
@@ -329,7 +428,7 @@ void adj(unsigned char key){
           date_time[3]++;
         }
       }
-      else if(key == BTN2){
+      else if(key == BTN3){
         if(date_time[3] == 0x00){
            date_time[3] = 0x31;
         }
@@ -342,21 +441,21 @@ void adj(unsigned char key){
       }
       break;
     case MODE_ADJ_HOUR_WAIT:
-      if(key == BTN0){
+      if(key == BTN1){
         mode = MODE_ADJ_MIN_WAIT;
         break;
       }
-      else if((key == BTN1) || (key == BTN2)){
+      else if((key == BTN2) || (key == BTN3)){
         mode = MODE_ADJ_HOUR;  // 時刻調整はbreakせずにこのままMODE_ADJ_HOURに行って行う。
       }
       else{
         break;
       }
     case MODE_ADJ_HOUR:
-      if(key == BTN0){
+      if(key == BTN1){
         mode = MODE_ADJ_MIN;
       }
-       else if(key == BTN1){
+       else if(key == BTN2){
          if(date_time[2] == 0x23){
            date_time[2] = 0x00;
          }
@@ -367,7 +466,7 @@ void adj(unsigned char key){
            date_time[2]++;
          }
       }
-      else if(key == BTN2){
+      else if(key == BTN3){
          if(date_time[2] == 0x00){
            date_time[2] = 0x23;
          }
@@ -380,24 +479,24 @@ void adj(unsigned char key){
       }
       break;
     case MODE_ADJ_MIN_WAIT:
-      if(key == BTN0){
+      if(key == BTN1){
         mode = MODE_CLOCK;
         break;
       }
-      else if((key == BTN1) || (key == BTN2)){
+      else if((key == BTN2) || (key == BTN3)){
         mode = MODE_ADJ_MIN;  // 時刻調整はbreakせずにこのままMODE_ADJ_MINに行って行う。
       }
       else{
         break;
       }
     case MODE_ADJ_MIN:
-      if(key == BTN0){
+      if(key == BTN1){
         mode = MODE_CLOCK;
         count=0;            // タイマインタラプトのカウンタをこーやってクリアするのは行儀悪い。
         date_time[0] = 0;
         Rtc.sync(date_time,7);
       }
-       else if(key == BTN1){
+       else if(key == BTN2){
          if(date_time[1] == 0x59){
            date_time[1] = 0x00;
          }
@@ -408,7 +507,7 @@ void adj(unsigned char key){
            date_time[1]++;
          }
       }
-      else if(key == BTN2){
+      else if(key == BTN3){
          if(date_time[1] == 0x00){
            date_time[1] = 0x59;
          }
@@ -428,8 +527,7 @@ void adj(unsigned char key){
   return;
 }
 
-
-void itm(void){
+void itm_man(void){
   unsigned char value;
   
   if(itm_firstf <= 1000){  // 最初の数秒はキースキャン行わない。
@@ -437,58 +535,276 @@ void itm(void){
     return;
   }
     
-  bounce_btn0.update();
-  bounce_btn1.update();
-  bounce_btn2.update();
-
-  value = bounce_btn0.read();
-  if(value == LOW){
-    if(btn0_chkw == 0){
-      adj(BTN0);
-      btn0_chkw = 1;
-    }
+  if(SHIELD_REV <= 210){
+    itm();
   }
-  else if(value == HIGH){
-    btn0_chkw = 0;
+  else{
+    value = itm_ana();
+  }
+
+  return;
+}
+
+#if (SHIELD_REV >= 220)
+
+unsigned char key_count;
+unsigned char key_last;
+#define ITM_SQ_SW123   0
+#define ITM_SQ_SW12    1
+#define ITM_SQ_SW13    2
+#define ITM_SQ_SW1     3
+#define ITM_SQ_SW23    4
+#define ITM_SQ_SW2     5
+#define ITM_SQ_SW3     6
+#define ITM_SQ_SW_NON  7
+
+void itm_ana_ini(void)
+{
+  unsigned long vcc;
+  unsigned long tmp1;
+  unsigned int count;
+  
+  vcc = analogRead(ITM_ANACH);
+  vcc = (50000 * vcc) / 33792;
+  vcc = 500000 / vcc;
+  
+  for(count=0;count<=8;count++){
+    tmp1 = ((102400/vcc)*itm_base_boundary[count])/100;
+    itm_boundary[count] = (int)tmp1;
   }
   
-  value = bounce_btn1.read();
-  if(value == LOW){
-    if(btn1_chkw == 0){
-      adj(BTN1);
-      btn1_chkw = 1;
+  key_count = 0;
+  key_last = ITM_SW_NON;
+
+  return;
+}
+
+
+unsigned char itm_ana(void)
+{
+  unsigned int val;
+  unsigned int key;
+  unsigned int ret;
+  int count;
+  
+  unsigned char key_tmp;
+  
+  key = ITM_SW_NON;    // まずは入力なしとする。
+  
+  val = analogRead(ITM_ANACH);
+  for(count=0;count<8;count++){
+    if( (itm_boundary[count] <= val) && (val < itm_boundary[count+1])){
+      key_tmp = count;
+      break;
     }
   }
-  else if(value == HIGH){
-    btn1_chkw = 0;
+  
+  if(key_tmp == key_last){
+     if(key_count >= 3){
+      key = key_tmp;
+     }
+     else{
+      key_count++;      
+     }
+  }
+  else{
+    key_count = 0;
+  }
+  key_last = key_tmp;
+  
+  if((key == ITM_SW1) && (BTN1_chkw == 0)){
+     adj(BTN1);
+   BTN1_chkw = 1;
+  }
+  else if((key == ITM_SW_NON) && (BTN1_chkw == 1)){
+    BTN1_chkw = 0;
   }
 
-  value = bounce_btn2.read();
+  if((key == ITM_SW2) && (BTN2_chkw == 0)){
+    adj(BTN2);
+    BTN2_chkw = 1;
+  }
+  else if((key == ITM_SW_NON) && (BTN2_chkw == 1)){
+    BTN2_chkw = 0;
+  }
+
+  if((key == ITM_SW3) && (BTN3_chkw == 0)){
+    adj(BTN3);
+    BTN3_chkw = 1;
+  }
+  else if((key == ITM_SW_NON) && (BTN3_chkw == 1)){
+    BTN3_chkw = 0;
+  }
+
+  key_now = key;
+
+  return(key);
+}
+
+#else
+void itm(void){
+  unsigned char value;
+  
+  bounce_BTN1.update();
+  bounce_BTN2.update();
+
+  value = bounce_BTN1.read();
   if(value == LOW){
-    if(btn2_chkw == 0){
-      adj(BTN2);
-      btn2_chkw = 1;
+    if(BTN1_chkw == 0){
+      adj(BTN1);
+      BTN1_chkw = 1;
     }
   }
   else if(value == HIGH){
-    btn2_chkw = 0;
+    BTN1_chkw = 0;
+  }
+  
+  value = bounce_BTN2.read();
+  if(value == LOW){
+    if(BTN2_chkw == 0){
+      adj(BTN2);
+      BTN2_chkw = 1;
+    }
+  }
+  else if(value == HIGH){
+    BTN2_chkw = 0;
+  }
+
+  itm_dig3();
+
+  return;
+}
+#endif
+
+void itm_dig3(void)
+{
+#if ((SHIELD_REV != 210) || (SW3 != 0))
+  unsigned char value;
+  
+  bounce_BTN3.update();
+  value = bounce_BTN3.read();
+  if(value == LOW){
+    if(BTN3_chkw == 0){
+      adj(BTN3);
+      BTN3_chkw = 1;
+    }
+  }
+  else if(value == HIGH){
+    BTN3_chkw = 0;
+  }
+#endif
+
+  return;
+}
+
+
+#ifdef LEONARDO
+void disp_vfd_leo(void)
+{
+  unsigned char portb,portc,portd,porte,portf;
+  unsigned char output_data;
+  static unsigned char disp_count;
+  static unsigned char count;
+  static unsigned char ketaw;
+  unsigned char dispketaw;
+
+  count++;
+  if(count % /*(char)*/DISP_PRE == 0){
+    disp_count++;
+  
+    // 表示データ作成
+    portb = PORTB & 0x0F;
+    portc = PORTC & 0x3F;
+    portd = PORTC & 0x13;
+    porte = PORTE & 0xBF;
+    portf = PORTF & 0x8F;
+
+    // 表示クリア
+    PORTB = portb;
+    PORTC = portc;
+    PORTD = portd;
+    PORTE = porte;
+    PORTF = portf;
+
+    // 点灯する桁更新
+    if(ketaw >= (DISP_KETAMAX-1)){
+      ketaw = 0;
+    }
+    else{
+      ketaw++;
+    }
+    dispketaw = (6 - keta[ketaw]);
+    // 各桁表示データ作成
+    output_data = font[time[dispketaw]] | piriod[dispketaw];
+    if(time[dispketaw] == 4){
+      portf |= 0x40;                        // "-"追加
+    }
+    
+    // 桁
+    if(dispketaw == 5){
+      portc |= 0x80;
+    }
+    else if(dispketaw == 4){
+      portd |= 0x40;
+    }
+    else if(dispketaw <= 3){
+      portb |= (0x10 << (dispketaw));
+    }
+
+    // : 表示
+    disp_colon_leonardo(count,&portf);
+
+    portd |= ((output_data & 0x01) << 2);  // dp
+    portd |= ((output_data & 0x02) << 2);  // d
+    portf |= ((output_data & 0x04) << 2);  // f
+    portf |= ((output_data & 0x08) << 2);  // g
+    portd |= ((output_data & 0x10));       // a
+    portc |= ((output_data & 0x20) << 1);  // b
+    portd |= ((output_data & 0x40) << 1);  // e
+    porte |= ((output_data & 0x80) >> 1);  // c
+ 
+    PORTB = portb;
+    PORTC = portc;
+    PORTD = portd;
+    PORTE = porte;
+    PORTF = portf;
+  }
+  else{
+    // : 表示
+    portf = PORTF;
+    disp_colon_leonardo(count,&portf);
+    PORTF = portf;
   }
   
   return;
 }
-
+#else
 void disp_vfd(void)
 {
   unsigned char portb,portc,portd;
   static unsigned char disp_count;
+  static unsigned char count;
   static unsigned char ketaw;
   unsigned char dispketaw;
 
-  disp_count++;
+  count++;
+  if(count % DISP_PRE == 0){
+    disp_count++;
+    
+    // 表示データ作成
+    if(SHIELD_REV <= 210){
+      portc = PORTC & 0xF7;
+      portd = PORTD;
+    }
+    else{
+      portc = PORTC & 0xF1;
+      portd = PORTD & 0x08;
+    }
   
-  // 表示データ作成
-  portc = PORTC & 0xF7;
-  if(disp_count %5 != 0){  
+    PORTB = 0;
+    PORTC = portc;
+    PORTD = portd;
+  
     // 点灯する桁更新
     if(ketaw >= (DISP_KETAMAX-1)){
       ketaw = 0;
@@ -500,18 +816,79 @@ void disp_vfd(void)
     portb = 0x01 << dispketaw;
     // 各桁表示データ作成
     portd = font[time[dispketaw]] | piriod[dispketaw];
-//    portc |= 0x08; // "-"追加
+
+    if(SHIELD_REV >= 220){
+      if((portd & 0x08) != 0){
+        portc |= 0x04; // g追加
+      }
+      if((portd & 0x04) != 0){
+        portc |= 0x08; // f追加
+      }
+      portd = portd & 0xF3;
+      if(time[dispketaw] == 4){
+        portc |= 0x02; // "-"追加
+      }
+    }
+    else{
+      if(time[dispketaw] == 4){
+        portc |= 0x08; // "-"追加
+      }
+    }
+  
+    // : 表示
+    disp_colon(count,&portc,&portd); 
+
+    PORTC = portc;
+    PORTD = portd;
+    PORTB = portb;
   }
   else{
-    portb = 0;
-    portd = 0;
+    // : 表示
+    portd = PORTD;
+    disp_colon(count,&portc,&portd); 
+    PORTD = portd;
   }
-  PORTB = portb;
-  PORTC = portc;
-  PORTD = portd;
 
   return;
 }
+#endif
+
+void disp_colon(unsigned char disp_count,unsigned char *portc,unsigned char *portd)
+{
+  if( (SHIELD_REV == 210) && (SW3 == 0) ){
+    if(((disp_count % COLON_PWM)) >= colon_brightw){
+      *portc |= 0x04;  // : 消灯
+    }
+    else{
+      *portc &= 0xFB;  // : 点灯
+    }
+  }
+  else if(SHIELD_REV >= 230){
+    if(((count % COLON_PWM) >= colon_brightw)){
+      *portd |= 0x08;  // : 消灯
+    }
+    else{
+      *portd &= 0xF7;  // : 点灯
+    } 
+  }
+  
+  return;
+}
+
+
+void disp_colon_leonardo(unsigned char disp_count,unsigned char *portf)
+{
+  // : 表示
+  if(((disp_count % COLON_PWM)) >= colon_brightw){
+    *portf |= 0x02;                        // 消灯
+  }
+  else{
+    *portf &= 0xFD;                        // 点灯
+  }
+
+  return;
+}
+
 
 void int_count(void){
   count++;
@@ -519,7 +896,14 @@ void int_count(void){
     count = 0;
     last_second = date_time[0];
   }
+
+#ifdef LEONARDO
+  disp_vfd_leo();
+#else
   disp_vfd();
+#endif
+
   return;
 }
+
 
