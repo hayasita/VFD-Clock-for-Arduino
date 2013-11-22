@@ -5,15 +5,16 @@
 #include <TimerOne.h>
 #include <inttypes.h>
 
-const unsigned char ver[] = "06";
+const unsigned char ver[] = "07";
 #define SHIELD_REV 230           // 基板Revision　×　100の値を設定　Rev.2.2 = 220
-#define LEONARDO               // Arduino種類 Leonardoでなければ、コメントアウトする。
+//#define LEONARDO                 // Arduino種類 Leonardoでなければ、コメントアウトする。
                                  // Leonardoは基板Revisionが220以上である必要がある。
 #define SW3 1                    // SW3を実装していない:0 実装している:1　Rev.2.1のみ有効
 #define  TIMER1_INTTIME  500     // タイマインタラプト周期
 #define  COLON_PWM      0x20     // : 点灯用PWM高さ
 #define  COLON_BRIGHT   0x04     // : の明るさ。値が大きいほど明るくなる。
 #define  DISP_PRE      (2000/TIMER1_INTTIME)  // 数字表示周期作成
+//#define  RTC_TEST                // RTC動作テスト
 //#define  KEY_TEST                // キー入力テスト表示 Revision210以前はテスト不要
 
 #if (SHIELD_REV <= 210)          // Rev.2.1以前はLeonardo非対応
@@ -75,6 +76,7 @@ unsigned char mode;
 #define MODE_ADJ_MONTH       9
 #define MODE_ADJ_DATE_WAIT  10
 #define MODE_ADJ_DATE       11
+#define MODE_RTC_TEST       12
 
 // SW定義
 #define BTN1 14
@@ -137,8 +139,7 @@ void rtc_chk(void);
 void setup()
 {
   int i;
-  
-// VFD出力ポート初期化
+
   for (i=0; i<=13; i++) {
     pinMode(i, OUTPUT);
     digitalWrite(i, LOW);
@@ -146,25 +147,25 @@ void setup()
   pinMode(17, OUTPUT);      // -
   digitalWrite(17, LOW);
 
-//  入力スイッチポート初期化  
-if( (SHIELD_REV <= 200) || ((SHIELD_REV == 210) && (SW3 != 0)) ){
-  for (i=BTN1; i<=BTN3; i++) {
-    pinMode(i,INPUT);
-    digitalWrite(i, HIGH);
+  //  入力スイッチポート初期化  
+  if( (SHIELD_REV <= 200) || ((SHIELD_REV == 210) && (SW3 != 0)) ){
+    for (i=BTN1; i<=BTN3; i++) {
+      pinMode(i,INPUT);
+      digitalWrite(i, HIGH);
+    }
   }
-}
-else if( ((SHIELD_REV == 210) && (SW3 == 0)) ){
-  for (i=BTN1; i<=BTN2; i++) {
-    pinMode(i,INPUT);
-    digitalWrite(i, HIGH);
+  else if( ((SHIELD_REV == 210) && (SW3 == 0)) ){
+    for (i=BTN1; i<=BTN2; i++) {
+      pinMode(i,INPUT);
+      digitalWrite(i, HIGH);
+    }
+    pinMode(16,OUTPUT);       // :
+    digitalWrite(16, LOW);
   }
-  pinMode(16,OUTPUT);       // :
-  digitalWrite(16, LOW);
-}
-else if(SHIELD_REV >= 220){
-  pinMode(14, INPUT);
-  itm_ana_ini();
-}
+  else if(SHIELD_REV >= 220){
+    pinMode(14, INPUT);
+    itm_ana_ini();
+  }
 
 #ifdef LEONARDO
   pinMode(A4,OUTPUT);       // :
@@ -185,7 +186,12 @@ else if(SHIELD_REV >= 220){
   Timer1.initialize(TIMER1_INTTIME);      // 割り込み周期設定
   Timer1.attachInterrupt(int_count);
 
+#ifdef RTC_TEST
+  Serial.begin(9600);
+  mode = MODE_RTC_TEST;
+#else
   mode = MODE_CLOCK;
+#endif
 
   second_counterw = int(1000000/TIMER1_INTTIME);    // 1秒間の割り込み回数
   count = 0;
@@ -199,6 +205,25 @@ void loop()
   itm_man();        // SW入力処理
   disp_datamake();  // 表示データ作成
 
+}
+
+void sirial_out(void){
+  if( (mode == MODE_RTC_TEST)){
+    Serial.print(0x2000+date_time[6],HEX);
+    Serial.print("/");
+    Serial.print(date_time[5],HEX);
+    Serial.print("/");
+    Serial.print(date_time[3],HEX);
+    Serial.print(" ");
+    Serial.print(date_time[2],HEX);
+    Serial.print(":");
+    Serial.print(date_time[1],HEX);
+    Serial.print(":");
+    Serial.println(date_time[0],HEX);
+//    Serial.print(":");
+//    Serial.println(key_now);
+  }  
+  return;
 }
 
 void rtc_chk(void){
@@ -216,7 +241,15 @@ void rtc_chk(void){
     date_time[5] = Rtc.months();
     date_time[6] = Rtc.years();
   }
-  
+  else if(mode == MODE_RTC_TEST){
+    date_time[1] = Rtc.minutes();
+    date_time[2] = Rtc.hours();
+    date_time[3] = Rtc.days();
+    date_time[4] = Rtc.weekdays();
+    date_time[5] = Rtc.months();
+    date_time[6] = Rtc.years();
+  }
+
   return;
 }
 
@@ -895,13 +928,16 @@ void int_count(void){
   if(last_second != date_time[0]){
     count = 0;
     last_second = date_time[0];
+    sirial_out();                        // RTCテスト用シリアル出力
   }
-
+  
+  if(mode != MODE_RTC_TEST){            // RTCテスト時はシリアル出力行うため、VFD表示しない。
 #ifdef LEONARDO
   disp_vfd_leo();
 #else
   disp_vfd();
 #endif
+  }
 
   return;
 }
