@@ -113,6 +113,9 @@ Bounce bounce_BTN3 = Bounce( BTN3,15 );
 static unsigned int itm_base_boundary[] = {0,187,200,213,236,262,286,315,500};
 unsigned int itm_boundary[sizeof(itm_base_boundary)];
 #endif
+unsigned char swtest_1[]={ 1,1,1,1,0,0,0,0 };
+unsigned char swtest_2[]={ 1,1,0,0,1,1,0,0 };
+unsigned char swtest_3[]={ 1,0,1,0,1,0,1,0 };
 
 
 uint8_t last_second;
@@ -128,7 +131,8 @@ void disp_datamake(void);
 void itm_man(void);
 void itm(void);
 void itm_ana_ini(void);
-unsigned char itm_ana(void);
+unsigned char itm_ana_tmread(void);
+unsigned char itm_ana(unsigned char key);
 void disp_vfd(void);
 void disp_colon(unsigned char disp_count,unsigned char *portc,unsigned char *portd);
 void disp_colon_leonardo(unsigned char disp_count,unsigned char *portf);
@@ -207,6 +211,7 @@ void loop()
 
 }
 
+
 void sirial_out(void){
   if( (mode == MODE_RTC_TEST)){
     Serial.print(0x2000+date_time[6],HEX);
@@ -220,8 +225,13 @@ void sirial_out(void){
     Serial.print(date_time[1],HEX);
     Serial.print(":");
     Serial.println(date_time[0],HEX);
-//    Serial.print(":");
-//    Serial.println(key_now);
+
+    Serial.print("SW1:");
+    Serial.print(swtest_1[key_now],DEC);
+    Serial.print(" SW2:");
+    Serial.print(swtest_2[key_now],DEC);
+    Serial.print(" SW3:");
+    Serial.println(swtest_3[key_now],DEC);
   }  
   return;
 }
@@ -562,6 +572,7 @@ void adj(unsigned char key){
 
 void itm_man(void){
   unsigned char value;
+  unsigned char key;
   
   if(itm_firstf <= 1000){  // 最初の数秒はキースキャン行わない。
     itm_firstf++;
@@ -572,7 +583,11 @@ void itm_man(void){
     itm();
   }
   else{
-    value = itm_ana();
+    key = itm_ana_tmread();         // アナログキー読み込み
+    key_now = key;                  // テスト表示用に格納
+    if(mode != MODE_RTC_TEST){
+      value = itm_ana(key);         // キー入力処理
+    }
   }
 
   return;
@@ -612,9 +627,44 @@ void itm_ana_ini(void)
   return;
 }
 
-
-unsigned char itm_ana(void)
+unsigned char itm_ana_tmread(void)
 {
+  unsigned int val;
+  unsigned int key;
+//  unsigned int ret;
+  int count;
+  
+  unsigned char key_tmp;
+  
+  key = ITM_SW_NON;    // まずは入力なしとする。
+  
+  val = analogRead(ITM_ANACH);
+  for(count=0;count<8;count++){
+    if( (itm_boundary[count] <= val) && (val < itm_boundary[count+1])){
+      key_tmp = count;
+      break;
+    }
+  }
+  
+  if(key_tmp == key_last){
+     if(key_count >= 3){
+      key = key_tmp;
+     }
+     else{
+      key_count++;      
+     }
+  }
+  else{
+    key_count = 0;
+  }
+  key_last = key_tmp;
+  
+  return(key);  
+}
+
+unsigned char itm_ana(unsigned char key)
+{
+/*
   unsigned int val;
   unsigned int key;
   unsigned int ret;
@@ -644,7 +694,7 @@ unsigned char itm_ana(void)
     key_count = 0;
   }
   key_last = key_tmp;
-  
+*/  
   if((key == ITM_SW1) && (BTN1_chkw == 0)){
      adj(BTN1);
    BTN1_chkw = 1;
@@ -669,7 +719,7 @@ unsigned char itm_ana(void)
     BTN3_chkw = 0;
   }
 
-  key_now = key;
+//  key_now = key;
 
   return(key);
 }
