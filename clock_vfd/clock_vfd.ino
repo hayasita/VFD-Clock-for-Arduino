@@ -1,13 +1,13 @@
 #include <Wire.h>
-#include <Bounce.h>
+//#include <Bounce.h>
 #include <RTC8564.h>
 //#include <MsTimer2.h>
 #include <TimerOne.h>
 #include <inttypes.h>
 
-const unsigned char ver[] = "07";
+const unsigned char ver[] = "07a";
 #define SHIELD_REV 230           // 基板Revision　×　100の値を設定　Rev.2.2 = 220
-//#define LEONARDO                 // Arduino種類 Leonardoでなければ、コメントアウトする。
+#define LEONARDO                 // Arduino種類 Leonardoでなければ、コメントアウトする。
                                  // Leonardoは基板Revisionが220以上である必要がある。
 #define SW3 1                    // SW3を実装していない:0 実装している:1　Rev.2.1のみ有効
 #define  TIMER1_INTTIME  500     // タイマインタラプト周期
@@ -19,6 +19,9 @@ const unsigned char ver[] = "07";
 
 #if (SHIELD_REV <= 210)          // Rev.2.1以前はLeonardo非対応
 #undef LEONARDO
+#endif
+#if (SHIELD_REV > 230)          // Rev.2.3以上はRev.2.3として扱う
+#define SHIELD_REV 230
 #endif
 
 unsigned int count;
@@ -98,7 +101,7 @@ Bounce bounce_BTN1 = Bounce( BTN1,15 );
 Bounce bounce_BTN2 = Bounce( BTN2,15 );
 #endif
 #if ((SHIELD_REV != 210) || (SW3 != 0))
-Bounce bounce_BTN3 = Bounce( BTN3,15 );
+//Bounce bounce_BTN3 = Bounce( BTN3,15 );
 #endif
 #if (SHIELD_REV >= 220)
 #define ITM_ANACH   0
@@ -762,6 +765,7 @@ void itm(void){
 void itm_dig3(void)
 {
 #if ((SHIELD_REV != 210) || (SW3 != 0))
+/*
   unsigned char value;
   
   bounce_BTN3.update();
@@ -775,6 +779,7 @@ void itm_dig3(void)
   else if(value == HIGH){
     BTN3_chkw = 0;
   }
+*/
 #endif
 
   return;
