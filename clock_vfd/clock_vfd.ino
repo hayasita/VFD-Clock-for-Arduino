@@ -5,7 +5,6 @@
 #include <TimerOne.h>
 #include <inttypes.h>
 
-const unsigned char ver[] = "07a";
 #define SHIELD_REV 230           // 基板Revision　×　100の値を設定　Rev.2.2 = 220
 #define LEONARDO                 // Arduino種類 Leonardoでなければ、コメントアウトする。
                                  // Leonardoは基板Revisionが220以上である必要がある。
@@ -14,6 +13,7 @@ const unsigned char ver[] = "07a";
 #define  COLON_PWM      0x20     // : 点灯用PWM高さ
 #define  COLON_BRIGHT   0x04     // : の明るさ。値が大きいほど明るくなる。
 #define  DISP_PRE      (2000/TIMER1_INTTIME)  // 数字表示周期作成
+const unsigned char ver[] = "07b";
 //#define  RTC_TEST                // RTC動作テスト
 //#define  KEY_TEST                // キー入力テスト表示 Revision210以前はテスト不要
 
