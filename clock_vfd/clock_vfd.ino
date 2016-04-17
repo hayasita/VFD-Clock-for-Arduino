@@ -3,14 +3,9 @@
 #include <RTC8564.h>
 //#include <MsTimer2.h>
 #include <TimerOne.h>
-#include <inttypes.h>
+//#include <inttypes.h>
 
 #define SHIELD_REV 230           // 基板Revision　×　100の値を設定　Rev.2.2 = 220
-#define SW3 1                    // SW3を実装していない:0 実装している:1　Rev.2.1のみ有効
-#define  TIMER1_INTTIME  500     // タイマインタラプト周期
-#define  COLON_PWM      0x20     // : 点灯用PWM高さ
-#define  COLON_BRIGHT   0x04     // : の明るさ。値が大きいほど明るくなる。
-#define  DISP_PRE      (2000/TIMER1_INTTIME)  // 数字表示周期作成
 const unsigned char ver[] = "07b";
 //#define  RTC_TEST                // RTC動作テスト
 //#define  KEY_TEST                // キー入力テスト表示 Revision210以前はテスト不要
@@ -23,6 +18,13 @@ const unsigned char ver[] = "07b";
 #if (SHIELD_REV > 230)          // Rev.2.3以上はRev.2.3として扱う
 #define SHIELD_REV 230
 #endif
+
+#define SW3 1                    // SW3を実装していない:0 実装している:1　Rev.2.1のみ有効
+
+#define  TIMER1_INTTIME  500     // タイマインタラプト周期
+#define  COLON_PWM      0x20     // : 点灯用PWM高さ
+#define  COLON_BRIGHT   0x04     // : の明るさ。値が大きいほど明るくなる。
+#define  DISP_PRE      (2000/TIMER1_INTTIME)  // 数字表示周期作成
 
 unsigned int count;
 unsigned int second_counterw;
