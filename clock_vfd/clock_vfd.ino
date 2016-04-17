@@ -4,9 +4,12 @@
 //#include <MsTimer2.h>
 #include <TimerOne.h>
 //#include <inttypes.h>
+#include <InputTerminal.h>
+
+const unsigned char ver[] = "07b";
 
 #define SHIELD_REV 230           // 基板Revision　×　100の値を設定　Rev.2.2 = 220
-const unsigned char ver[] = "07b";
+//#define SHIELD_REV 200           // 基板Revision　×　100の値を設定　Rev.2.2 = 220
 //#define  RTC_TEST                // RTC動作テスト
 //#define  KEY_TEST                // キー入力テスト表示 Revision210以前はテスト不要
 
@@ -16,7 +19,7 @@ const unsigned char ver[] = "07b";
 #endif
 
 #if (SHIELD_REV > 230)          // Rev.2.3以上はRev.2.3として扱う
-#define SHIELD_REV 230
+  #define SHIELD_REV 230
 #endif
 
 #define SW3 1                    // SW3を実装していない:0 実装している:1　Rev.2.1のみ有効
@@ -98,13 +101,23 @@ unsigned int itm_firstf;
 unsigned char BTN1_chkw;
 unsigned char BTN2_chkw;
 unsigned char BTN3_chkw;
+/*
 #if (SHIELD_REV <= 210)
-Bounce bounce_BTN1 = Bounce( BTN1,15 );
-Bounce bounce_BTN2 = Bounce( BTN2,15 );
+//Bounce bounce_BTN1 = Bounce( BTN1,15 );
+//Bounce bounce_BTN2 = Bounce( BTN2,15 );
 #endif
 #if ((SHIELD_REV != 210) || (SW3 != 0))
 //Bounce bounce_BTN3 = Bounce( BTN3,15 );
 #endif
+*/
+#if (SHIELD_REV == 210) && (SW3 == 0)
+unsigned char sw_list[] = { BTN1, BTN2 };
+#else
+unsigned char sw_list[] = { BTN1, BTN2, BTN3 };
+#endif
+InputTerminal tm(sw_list, sizeof(sw_list));
+
+
 #if (SHIELD_REV >= 220)
 #define ITM_ANACH   0
 #define ITM_SW123   0
@@ -157,7 +170,7 @@ void setup()
   digitalWrite(17, LOW);
 
   //  入力スイッチポート初期化  
-  if( (SHIELD_REV <= 200) || ((SHIELD_REV == 210) && (SW3 != 0)) ){
+/*  if( (SHIELD_REV <= 200) || ((SHIELD_REV == 210) && (SW3 != 0)) ){
     for (i=BTN1; i<=BTN3; i++) {
       pinMode(i,INPUT);
       digitalWrite(i, HIGH);
@@ -171,7 +184,8 @@ void setup()
     pinMode(16,OUTPUT);       // :
     digitalWrite(16, LOW);
   }
-  else if(SHIELD_REV >= 220){
+  else */
+  if(SHIELD_REV >= 220){
     pinMode(14, INPUT);
     itm_ana_ini();
   }
@@ -731,6 +745,7 @@ unsigned char itm_ana(unsigned char key)
 
 #else
 void itm(void){
+ /*
   unsigned char value;
   
   bounce_BTN1.update();
@@ -759,6 +774,33 @@ void itm(void){
   }
 
   itm_dig3();
+*/
+
+  unsigned int onw;
+
+  tm.scan();           // Update the terminaldata
+  onw = tm.read();     // Read the key input data
+  
+  if (onw != 0) {
+    switch (onw) {
+      case 0x01:
+//        Serial.println("ON : BUTTON_0");
+        adj(BTN1);
+        break;
+      case 0x02:
+//        Serial.println("ON : BUTTON_1");
+        adj(BTN2);
+        break;
+      case 0x04:
+//        Serial.println("ON : BUTTON_2");
+        adj(BTN3);
+        break;
+      default:
+//        Serial.println("ON : Other Key");
+        break;
+    }
+  }
+  else {}
 
   return;
 }
