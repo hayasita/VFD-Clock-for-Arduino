@@ -6,8 +6,6 @@
 #include <inttypes.h>
 
 #define SHIELD_REV 230           // 基板Revision　×　100の値を設定　Rev.2.2 = 220
-#define LEONARDO                 // Arduino種類 Leonardoでなければ、コメントアウトする。
-                                 // Leonardoは基板Revisionが220以上である必要がある。
 #define SW3 1                    // SW3を実装していない:0 実装している:1　Rev.2.1のみ有効
 #define  TIMER1_INTTIME  500     // タイマインタラプト周期
 #define  COLON_PWM      0x20     // : 点灯用PWM高さ
@@ -17,9 +15,11 @@ const unsigned char ver[] = "07b";
 //#define  RTC_TEST                // RTC動作テスト
 //#define  KEY_TEST                // キー入力テスト表示 Revision210以前はテスト不要
 
-#if (SHIELD_REV <= 210)          // Rev.2.1以前はLeonardo非対応
-#undef LEONARDO
+// Arduino Leonardo
+#if defined(__AVR_ATmega32U4__) && (SHIELD_REV >= 220)
+  #define LEONARDO               // Leonardoは基板Revisionが220以上である必要がある。
 #endif
+
 #if (SHIELD_REV > 230)          // Rev.2.3以上はRev.2.3として扱う
 #define SHIELD_REV 230
 #endif
